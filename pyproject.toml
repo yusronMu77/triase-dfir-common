@@ -1,0 +1,6 @@
+[project]
+name = "astria-common"
+version = "0.0.0"
+description = "Pustaka bersama (astria_common): logging, tracing, auth, outbox/inbox, klien layanan."
+requires-python = ">=3.14"
+dependencies = []
