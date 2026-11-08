@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- Basis data dua dialek (keputusan pemilik 2026-11-08): PostgreSQL di server (psycopg 3) dan SQLite untuk proses lokal (aiosqlite, WAL, `foreign_keys=ON`, `busy_timeout`). Dialek dipilih dari skema `ASTRIA_DATABASE_URL`; `Database.dialect` dan `Database.name` (`postgres` atau `sqlite`) tampil di `/ready`.
+- `dialect_of()` dan `normalize_url()` di `astria_common.db`; `ASTRIA_DATABASE_URL` dengan dialek selain PostgreSQL atau SQLite ditolak saat konfigurasi dibaca.
+- Pagar `ASTRIA_ENV=prod` menolak SQLite; nama basis data SQLite diambil dari nama berkas (akhiran `_dev` atau `_demo` tetap diperiksa).
+- Dependensi `aiosqlite>=0.22.0,<1`.
+
+### Changed
+
+- `Database.name` kini instance, bukan konstanta kelas. `schema` diabaikan di SQLite.
+
 ## [0.1.0] - 2026-11-08
 
 ### Added

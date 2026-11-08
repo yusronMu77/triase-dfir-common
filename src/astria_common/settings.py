@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Env = Literal["dev", "demo", "prod", "test"]
@@ -27,7 +27,8 @@ class AstriaSettings(BaseSettings):
     log_level: LogLevel = "INFO"
 
     database_url: SecretStr | None = None
-    """URL SQLAlchemy, mis. postgresql+psycopg://user:pw@postgres:5432/ingest_dev. Hanya akun layanan ini."""
+    """URL SQLAlchemy. Server: postgresql+psycopg://user:pw@postgres:5432/ingest_dev (hanya akun layanan ini).
+    Lokal: sqlite+aiosqlite:///./data/ingest_dev.db. `prod` menolak SQLite."""
     db_schema: str | None = None
     """Skema PostgreSQL milik layanan (bila satu basis data dipakai bersama). Kosong = skema bawaan."""
 
@@ -40,6 +41,16 @@ class AstriaSettings(BaseSettings):
     service_key: SecretStr | None = None
     service_key_file: Path | None = None
     """Kunci HMAC awal layanan ini (hex). Dipakai untuk meminta token layanan ke identity."""
+
+    @field_validator("database_url")
+    @classmethod
+    def _database_url_dialect(cls, value: SecretStr | None) -> SecretStr | None:
+        """PostgreSQL (server) atau SQLite (lokal); dialek lain ditolak saat konfigurasi dibaca."""
+        if value is not None:
+            from astria_common.db import dialect_of
+
+            dialect_of(value.get_secret_value())
+        return value
 
     def service_key_bytes(self) -> bytes | None:
         """Kunci layanan dari berkas secret (diutamakan) atau dari env."""
