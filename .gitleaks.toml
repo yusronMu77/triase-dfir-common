@@ -1,0 +1,11 @@
+# Konfigurasi gitleaks repo common: semua rule bawaan, ditambah pengecualian sempit untuk false positive.
+title = "triase-dfir-common"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Anotasi tipe field dataclass SigningKey (bukan nilai kunci)"
+regexTarget = "line"
+paths = ['''^src/astria_common/auth\.py$''']
+regexes = ['''^\s*private_key: Ed25519PrivateKey\s*(#.*)?$''']
