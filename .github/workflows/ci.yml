@@ -1,0 +1,63 @@
+# Action dan alat dipin dengan SHA atau checksum; tidak ada tag mutabel.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.7"
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ASTRIA_TEST_DATABASE_URL: postgresql+psycopg://astria:ci-only@127.0.0.1:5432/postgres
+      ASTRIA_TEST_NATS_URL: nats://127.0.0.1:4222
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: PostgreSQL dan NATS untuk uji integrasi
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=astria -e POSTGRES_PASSWORD=ci-only postgres:18.6-alpine
+          docker run -d --name nats -p 4222:4222 nats:2.15.2-alpine -js
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.14"
+          enable-cache: true
+      - name: Akses dependensi privat (astria-contracts)
+        env:
+          DEPS_TOKEN: ${{ secrets.DEPS_TOKEN || secrets.BOARD_TOKEN }}
+        run: git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/yusronMu77/".insteadOf "https://github.com/yusronMu77/"
+      - run: uv sync --locked --all-extras
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - name: Tunggu PostgreSQL
+        run: for i in $(seq 1 30); do docker exec pg pg_isready -U astria && break; sleep 1; done
+      - run: uv run pytest -q
+      - name: Templat layanan ter-render dan lolos uji
+        run: |
+          python template/render.py /tmp/svc --service contoh
+          cd /tmp/svc
+          printf '# Astria contoh\n' > README.md
+          uv venv -q
+          contracts_tag="$(sed -n 's/.*triase-dfir-contracts", tag = "\([^"]*\)".*/\1/p' "$GITHUB_WORKSPACE/pyproject.toml")"
+          uv pip install -q --no-sources "astria-contracts @ git+https://github.com/yusronMu77/triase-dfir-contracts@${contracts_tag}" \
+            -e "$GITHUB_WORKSPACE[otel]" -e . "pytest==9.2.0" "anyio>=4.11" "ruff==0.17.4"
+          .venv/bin/ruff format --check . && .venv/bin/ruff check . && .venv/bin/pytest -q
+      - name: gitleaks
+        run: docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" git --redact --no-banner /repo
