@@ -53,7 +53,7 @@ wheels = [
 
 [[package]]
 name = "astria-common"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -91,7 +91,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.0,<1" },
-    { name = "astria-contracts", git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.2.0" },
+    { name = "astria-contracts", git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.3.0" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.162.0,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
@@ -121,8 +121,8 @@ dev = [
 
 [[package]]
 name = "astria-contracts"
-version = "0.2.0"
-source = { git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.2.0#2afa29c332c6fe5164d39cc12d5301b272597370" }
+version = "0.3.0"
+source = { git = "https://github.com/yusronMu77/triase-dfir-contracts?tag=v0.3.0#d984839ecb832ed33890b2bf0b6638318e8c8189" }
 dependencies = [
     { name = "pydantic" },
 ]

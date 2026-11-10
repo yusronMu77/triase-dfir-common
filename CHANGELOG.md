@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-10
+
+### Changed
+
+- Dependensi `astria-contracts` naik dari `v0.2.0` ke `v0.3.0` (event `digest.published`, kunci correlation `digest_id` dan `case_id`). Tidak ada perubahan kode.
+
 ## [0.2.1] - 2026-11-10
 
 ### Changed
