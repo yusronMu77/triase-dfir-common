@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-10
+
+### Changed
+
+- Dependensi `astria-contracts` naik dari `v0.1.0` ke `v0.2.0` (event `narration.retry_requested`, field opsional `kode.teknik_attack`/`kode.temuan_korelasi` dan `evidence.ingested.file_sha256`/`batch_sha256`). Tanpa ini layanan yang memakai contracts v0.2.0 tidak bisa di-lock karena URL git contracts bentrok. Tidak ada perubahan kode.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
