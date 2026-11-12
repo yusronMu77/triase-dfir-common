@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-12
+
+### Changed
+
+- Dependensi `astria-contracts` naik dari `v0.3.0` ke `v0.4.0` (OpenAPI identity, audit, config; event `identity.revoked` dan `config.changed`). Tidak ada perubahan kode. Layanan yang memakai `override-dependencies` untuk contracts v0.4.0 bisa menghapusnya.
+
 ## [0.2.2] - 2026-11-10
 
 ### Changed

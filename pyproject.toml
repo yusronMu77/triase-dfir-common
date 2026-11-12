@@ -1,6 +1,6 @@
 [project]
 name = "astria-common"
-version = "0.2.2"
+version = "0.2.3"
 description = "Pustaka bersama Astria (astria_common): konfigurasi, pagar ASTRIA_ENV, log, health, metrik, auth layanan, event, outbox, konsumen idempoten."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-astria-contracts = { git = "https://github.com/yusronMu77/triase-dfir-contracts", tag = "v0.3.0" }
+astria-contracts = { git = "https://github.com/yusronMu77/triase-dfir-contracts", tag = "v0.4.0" }
 
 [build-system]
 requires = ["hatchling>=1.27,<2"]
