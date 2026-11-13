@@ -9,6 +9,7 @@ jadi kegagalan membatalkan keduanya dan pesan dikirim ulang. Pesan yang tidak bi
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Sequence
 
 import orjson
@@ -23,9 +24,9 @@ from astria_common.component import Check
 from astria_common.db import Database
 from astria_common.events import EventBus, UnknownEventType, decode
 from astria_common.log import get_logger
-from astria_common.metrics import EVENTS_CONSUMED
+from astria_common.metrics import EVENT_HANDLE_SECONDS, EVENTS_CONSUMED
 from astria_common.outbox import processed_events
-from astria_common.tracing import bind_trace, reset_trace
+from astria_common.tracing import bind_trace, record_span_error, reset_trace, trace_span
 from astria_contracts import Envelope
 
 log = get_logger(__name__)
@@ -115,7 +116,30 @@ class Consumer:
             await self._dead_letter(msg, f"tidak_valid:{type(exc).__name__}")
             return
 
+        attributes = {
+            "messaging.system": "nats",
+            "messaging.operation.type": "process",
+            "messaging.destination.name": msg.subject,
+            "messaging.consumer.group.name": self._durable,
+            "messaging.message.id": envelope.id,
+            "astria.event.type": envelope.type,
+        }
+        started = time.perf_counter()
         token = bind_trace(envelope.trace_id, **envelope.correlation.model_dump(exclude_none=True))
+        try:
+            with trace_span(
+                f"process {envelope.type}",
+                kind="consumer",
+                trace_id=envelope.trace_id,
+                carrier=msg.headers,
+                attributes=attributes,
+            ):
+                await self._process(msg, envelope, data)
+        finally:
+            EVENT_HANDLE_SECONDS.labels(self._durable).observe(time.perf_counter() - started)
+            reset_trace(token)
+
+    async def _process(self, msg: Msg, envelope: Envelope, data: BaseModel) -> None:
         try:
             async with self._db.engine.begin() as conn:
                 inserted = await conn.execute(
@@ -137,6 +161,7 @@ class Consumer:
             self._last_error = None
         except Exception as exc:  # noqa: BLE001 - kegagalan handler: coba ulang lalu surat mati
             self._last_error = type(exc).__name__
+            record_span_error(exc)
             delivered = msg.metadata.num_delivered or 1
             log.warning("event_gagal", event_id=envelope.id, attempt=delivered, error=self._last_error)
             EVENTS_CONSUMED.labels(self._durable, "retry").inc()
@@ -144,8 +169,6 @@ class Consumer:
                 await self._dead_letter(msg, f"gagal_berulang:{self._last_error}")
             else:
                 await msg.nak(delay=self._backoff[min(delivered, len(self._backoff)) - 1])
-        finally:
-            reset_trace(token)
 
     async def _dead_letter(self, msg: Msg, reason: str) -> None:
         meta = msg.metadata

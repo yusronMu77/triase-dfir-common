@@ -154,3 +154,39 @@ async def test_failing_handler_retries_then_dead_letters(stack) -> None:
         rows = (await conn.execute(select(func.count()).select_from(processed_events))).scalar_one()
     assert rows == 0  # transaksi gagal ikut membatalkan penanda processed_events
     await consumer.stop()
+
+
+async def test_trace_outbox_ke_konsumen_satu_trace(stack, otel) -> None:
+    """Relay membuka span producer dengan trace id amplop; span konsumen adalah anaknya (lewat header NATS)."""
+    db, bus, tag = stack
+    seen: list[str | None] = []
+
+    async def handler(_conn, envelope, data) -> None:
+        from astria_common.tracing import active_span_trace_id
+
+        seen.append(active_span_trace_id())
+
+    consumer = Consumer(bus, db, durable=f"trace-{tag}", event_type="evidence.ingested", handler=handler)
+    relay = OutboxRelay(db, bus, interval=0.1)
+    await consumer.start()
+    await relay.start()
+    await consumer.wait_subscribed(10)
+
+    trace_id = uuid.uuid4().hex
+    event = new_event("evidence.ingested", example("evidence.ingested")["data"], trace_id=trace_id)
+    async with db.engine.begin() as conn:
+        await enqueue(conn, event)
+
+    async def processed() -> bool:
+        return bool(seen)
+
+    await wait_until(processed)
+    await relay.stop()
+    await consumer.stop()
+
+    assert seen == [trace_id]
+    spans = {s.name: s for s in otel.get_finished_spans()}
+    producer, process = spans["publish evidence.ingested"], spans["process evidence.ingested"]
+    assert format(producer.context.trace_id, "032x") == trace_id == format(process.context.trace_id, "032x")
+    assert process.parent is not None and process.parent.span_id == producer.context.span_id
+    assert process.attributes["messaging.consumer.group.name"] == f"trace-{tag}"
