@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-14
+
+### Added
+
+- Trace terpadu (infra#7): trace id permintaan (log, `X-Trace-Id`, `trace_id` galat dan amplop event) kini sama dengan trace id span OpenTelemetry, sehingga bisa dibuka langsung di Jaeger. Sebelumnya permintaan tanpa `traceparent` mendapat trace id acak yang tidak ada di Jaeger.
+- Propagator `X-Trace-Id`: permintaan yang hanya membawa `X-Trace-Id` tetap memakai trace id itu di OTel.
+- `make_client`: host internal (nama layanan compose, `localhost`, IP privat, `*.internal`) mendapat span klien dan header `traceparent`/`X-Trace-Id`; host luar (mis. `api.telegram.org`) tidak. Paksa dengan `propagate_trace=True/False`.
+- NATS: `EventBus.publish_raw` membuka span producer dan menyertakan `traceparent` di header pesan; `Consumer` membuka span consumer dengan trace id amplop (anak span producer bila header cocok). Relay outbox membuka span akar dengan trace id amplop (`AstriaIdGenerator`), jadi satu alur event tampil sebagai satu trace.
+- `tracing.trace_span()`, `outbound_trace_headers()`, `resolve_trace_id()`, `active_span_trace_id()`, `record_span_error()`, `otel_enabled()`.
+- Metrik `astria_http_request_duration_seconds` (histogram, `method`, `route`; tanpa `/health`, `/ready`, `/metrics`) dan `astria_event_handle_duration_seconds` (histogram, `consumer`).
+- Atribut resource `service.version` dan `deployment.environment.name` di trace.
+
+### Changed
+
+- `setup_otel` memasang TracerProvider sekali per proses; aplikasi berikutnya di proses yang sama hanya diinstrumentasi.
+- `EventBus.publish_raw` menerima argumen kata kunci `trace_id` (opsional).
+
 ## [0.2.3] - 2026-11-12
 
 ### Changed

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from astria_common.component import Check
 from astria_common.log import get_logger
 from astria_common.metrics import EVENTS_PUBLISHED
-from astria_common.tracing import current_trace_id, new_trace_id
+from astria_common.tracing import current_trace_id, new_trace_id, otel_enabled, outbound_trace_headers, trace_span
 from astria_contracts import DUPLICATE_WINDOW_SECONDS, EVENTS, STREAM_NAME, STREAM_SUBJECTS, Correlation, Envelope
 
 log = get_logger(__name__)
@@ -173,15 +173,31 @@ class EventBus:
 
     async def publish(self, envelope: Envelope, *, subject: str | None = None) -> PubAck:
         return await self.publish_raw(
-            subject or self.subject(envelope.type), encode(envelope), envelope.id, envelope.type
+            subject or self.subject(envelope.type),
+            encode(envelope),
+            envelope.id,
+            envelope.type,
+            trace_id=envelope.trace_id,
         )
 
-    async def publish_raw(self, subject: str, payload: bytes, msg_id: str, event_type: str = "raw") -> PubAck:
-        try:
-            ack = await self.js.publish(subject, payload, headers={"Nats-Msg-Id": msg_id}, timeout=5)
-        except Exception:
-            EVENTS_PUBLISHED.labels(event_type, "error").inc()
-            raise
+    async def publish_raw(
+        self, subject: str, payload: bytes, msg_id: str, event_type: str = "raw", *, trace_id: str | None = None
+    ) -> PubAck:
+        """Terbitkan dengan `Nats-Msg-Id`; `traceparent` di header menautkan span konsumen ke span penerbit."""
+        attributes = {
+            "messaging.system": "nats",
+            "messaging.operation.type": "send",
+            "messaging.destination.name": subject,
+            "messaging.message.id": msg_id,
+            "astria.event.type": event_type,
+        }
+        with trace_span(f"publish {event_type}", kind="producer", trace_id=trace_id, attributes=attributes):
+            headers = {"Nats-Msg-Id": msg_id} | (outbound_trace_headers() if otel_enabled() else {})
+            try:
+                ack = await self.js.publish(subject, payload, headers=headers, timeout=5)
+            except Exception:
+                EVENTS_PUBLISHED.labels(event_type, "error").inc()
+                raise
         EVENTS_PUBLISHED.labels(event_type, "duplicate" if ack.duplicate else "ok").inc()
         return ack
 

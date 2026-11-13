@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 
@@ -15,7 +16,7 @@ from astria_common.auth import JwksSource, ServiceTokenVerifier
 from astria_common.component import Check, Component
 from astria_common.errors import install_error_handlers
 from astria_common.log import configure_logging, get_logger
-from astria_common.metrics import HTTP_REQUESTS, SERVICE_INFO
+from astria_common.metrics import HTTP_REQUEST_SECONDS, HTTP_REQUESTS, SERVICE_INFO
 from astria_common.settings import AstriaSettings
 from astria_common.tracing import install_trace_middleware, setup_otel
 
@@ -88,17 +89,20 @@ def create_app(
 
     @app.middleware("http")
     async def _access(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        started = time.perf_counter()
         response = await call_next(request)
         route = request.scope.get("route")
         path = getattr(route, "path", "unmatched")
         HTTP_REQUESTS.labels(request.method, path, str(response.status_code)).inc()
+        if request.url.path not in _QUIET_PATHS:
+            HTTP_REQUEST_SECONDS.labels(request.method, path).observe(time.perf_counter() - started)
         if request.url.path not in _QUIET_PATHS:
             log.info("http", method=request.method, route=path, status=response.status_code)
         return response
 
     # Ditambahkan terakhir = lapisan terluar: log akses di atas sudah membawa trace_id.
     install_trace_middleware(app)
-    setup_otel(app, settings.service_name, settings.otlp_endpoint)
+    setup_otel(app, settings.service_name, settings.otlp_endpoint, version=settings.version, env=settings.env)
 
     async def _report(*, ready: bool) -> tuple[int, dict]:
         results = await asyncio.gather(*(_safe_check(c) for c in components))

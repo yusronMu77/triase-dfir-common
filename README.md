@@ -31,6 +31,18 @@ Python 3.14, uv 0.13.7, FastAPI, pydantic-settings, structlog, prometheus-client
 | `auth` | Token layanan JWT EdDSA 300 detik, JWKS, `require_service(audience, allowed_callers)`, `ServiceTokenClient` |
 | `audit_client` | `AuditClient.record()` sinkron fail-closed untuk aksi kritis; `audit_event()` asinkron lewat outbox |
 | `service` | `standard_runtime()`: DB, bus, dan relay dalam satu `Runtime` |
+| `tracing` | Satu trace id untuk log, `X-Trace-Id`, galat, amplop event, dan Jaeger; `setup_otel` (OTLP HTTP ke `ASTRIA_OTLP_ENDPOINT`), `trace_span()`, `outbound_trace_headers()` |
+| `http` | `make_client()`: batas waktu, tanpa redirect; host internal mendapat `traceparent`/`X-Trace-Id` dan span klien, host luar tidak (`propagate_trace`) |
+| `metrics` | Metrik Prometheus bersama, termasuk histogram `astria_http_request_duration_seconds` dan `astria_event_handle_duration_seconds` |
+
+### Trace
+
+Dengan extra `otel` dan `ASTRIA_OTLP_ENDPOINT` terisi, trace id permintaan sama dengan trace id span OpenTelemetry,
+jadi `trace_id` dari log atau galat bisa langsung dibuka di Jaeger. `traceparent` masuk dipakai sebagai induk;
+`X-Trace-Id` saja juga dihormati. `make_client` ke host internal membuka span klien dan meneruskan konteks. Pesan NATS
+membawa `traceparent`; relay outbox membuka span `publish <jenis>` dengan trace id amplop (span akar karena outbox
+memisahkan waktu terbit dari permintaan asal) dan konsumen membuka span `process <jenis>` sebagai anaknya. Tanpa OTel,
+trace id tetap diteruskan lewat header dan amplop untuk korelasi log.
 
 ## Layanan baru dari templat
 
