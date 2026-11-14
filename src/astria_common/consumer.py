@@ -2,8 +2,10 @@
 
 Setiap pesan diproses dalam satu transaksi: baris `processed_events (consumer, event_id)` disisipkan dulu;
 bila sudah ada, pesan adalah duplikat dan hanya di-ack. Efek samping handler ditulis di transaksi yang sama,
-jadi kegagalan membatalkan keduanya dan pesan dikirim ulang. Pesan yang tidak bisa diurai, atau gagal
-`max_deliver` kali, diterbitkan ke `astria.dlq.<konsumen>` lalu di-ack; jumlahnya terlihat di /health.
+jadi kegagalan membatalkan keduanya dan pesan dikirim ulang. Pesan yang tidak bisa diurai, gagal
+`max_deliver` kali, atau gagal dengan `PermanentError`, diterbitkan ke `astria.dlq.<konsumen>` lalu di-ack;
+jumlahnya terlihat di /health. Bila penerbitan ke DLQ gagal, pesan asli tidak di-ack: dikirim ulang (nak
+berjeda) selama `max_deliver` belum habis.
 """
 
 from __future__ import annotations
@@ -33,6 +35,16 @@ log = get_logger(__name__)
 
 Handler = Callable[[AsyncConnection, Envelope, BaseModel], Awaitable[None]]
 DEFAULT_BACKOFF = (1.0, 5.0, 30.0, 120.0)
+
+
+class PermanentError(Exception):
+    """Galat handler yang tidak akan sembuh dengan mengulang event yang sama (mis. data tidak valid).
+
+    Handler yang melemparnya membuat `Consumer` menerbitkan event ke DLQ saat itu juga, tanpa menghabiskan
+    `max_deliver` dan jeda backoff. Transaksi handler tetap dibatalkan, jadi `processed_events` tidak terisi.
+    Pesannya ikut dicatat di record DLQ dan log: jangan isi dengan rahasia atau data mentah. Galat lain
+    (termasuk galat database) tetap dianggap sementara; klasifikasi permanen harus eksplisit.
+    """
 
 
 class Consumer:
@@ -107,13 +119,17 @@ class Consumer:
                 await asyncio.sleep(1)
                 continue
             for msg in msgs:
-                await self._handle(msg)
+                try:
+                    await self._handle(msg)
+                except Exception as exc:  # noqa: BLE001 - mis. nak gagal karena koneksi; ack_wait mengirim ulang
+                    self._last_error = type(exc).__name__
+                    log.error("konsumen_gagal_menangani", consumer=self._durable, error=self._last_error)
 
     async def _handle(self, msg: Msg) -> None:
         try:
             envelope, data = decode(msg.data)
         except (ValidationError, UnknownEventType, ValueError) as exc:
-            await self._dead_letter(msg, f"tidak_valid:{type(exc).__name__}")
+            await self._dead_letter_or_retry(msg, f"tidak_valid:{type(exc).__name__}")
             return
 
         attributes = {
@@ -159,6 +175,13 @@ class Consumer:
                     log.info("event_diproses", event_id=envelope.id, type=envelope.type)
             await msg.ack()
             self._last_error = None
+        except PermanentError as exc:
+            self._last_error = type(exc).__name__
+            record_span_error(exc)
+            delivered = msg.metadata.num_delivered or 1
+            log.warning("event_gagal_permanen", event_id=envelope.id, attempt=delivered, error=self._last_error)
+            EVENTS_CONSUMED.labels(self._durable, "permanent").inc()
+            await self._dead_letter_or_retry(msg, f"permanen:{self._last_error}", envelope=envelope, detail=str(exc))
         except Exception as exc:  # noqa: BLE001 - kegagalan handler: coba ulang lalu surat mati
             self._last_error = type(exc).__name__
             record_span_error(exc)
@@ -166,11 +189,41 @@ class Consumer:
             log.warning("event_gagal", event_id=envelope.id, attempt=delivered, error=self._last_error)
             EVENTS_CONSUMED.labels(self._durable, "retry").inc()
             if delivered >= self._max_deliver:
-                await self._dead_letter(msg, f"gagal_berulang:{self._last_error}")
+                await self._dead_letter_or_retry(msg, f"gagal_berulang:{self._last_error}", envelope=envelope)
             else:
                 await msg.nak(delay=self._backoff[min(delivered, len(self._backoff)) - 1])
 
-    async def _dead_letter(self, msg: Msg, reason: str) -> None:
+    async def _dead_letter_or_retry(
+        self, msg: Msg, reason: str, *, envelope: Envelope | None = None, detail: str | None = None
+    ) -> None:
+        """Terbitkan ke DLQ lalu ack. Bila gagal, pesan asli TIDAK di-ack: nak berjeda agar dicoba lagi.
+
+        Penerbitan ulang aman: `Nats-Msg-Id` DLQ diturunkan dari stream_seq sehingga JetStream menyaring duplikat.
+        Pada pengiriman terakhir tidak ada nak lagi (JetStream tidak mengirim ulang); pesan tetap di stream tanpa
+        ack dan `stream_seq` ada di log untuk diputar ulang manual.
+        """
+        try:
+            await self._dead_letter(msg, reason, envelope=envelope, detail=detail)
+        except Exception as exc:  # noqa: BLE001 - jangan sampai satu pesan menjatuhkan loop konsumen
+            self._last_error = type(exc).__name__
+            record_span_error(exc)
+            meta = msg.metadata
+            delivered = meta.num_delivered or 1
+            stream_seq = meta.sequence.stream if meta and meta.sequence else None
+            log.error(
+                "event_surat_mati_gagal",
+                consumer=self._durable,
+                reason=reason,
+                stream_seq=stream_seq,
+                attempt=delivered,
+                error=self._last_error,
+            )
+            if delivered < self._max_deliver:
+                await msg.nak(delay=self._backoff[min(delivered, len(self._backoff)) - 1])
+
+    async def _dead_letter(
+        self, msg: Msg, reason: str, *, envelope: Envelope | None = None, detail: str | None = None
+    ) -> None:
         meta = msg.metadata
         record = {
             "consumer": self._durable,
@@ -179,6 +232,11 @@ class Consumer:
             "stream_seq": meta.sequence.stream if meta and meta.sequence else None,
             "payload": msg.data.decode("utf-8", errors="replace"),
         }
+        if envelope is not None:
+            record["event_id"] = envelope.id
+            record["trace_id"] = envelope.trace_id
+        if detail:
+            record["detail"] = detail[:500]
         msg_id = f"dlq-{self._durable}-{record['stream_seq']}"
         await self._bus.publish_raw(self._bus.dlq_subject(self._durable), orjson.dumps(record), msg_id, "dlq")
         await msg.ack()
