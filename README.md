@@ -26,7 +26,7 @@ Python 3.14, uv 0.13.7, FastAPI, pydantic-settings, structlog, prometheus-client
 | `db` | `Database`: engine async, skema per layanan, siapkan tabel di latar dengan coba ulang |
 | `events` | Amplop event, `EventBus` (JetStream, stream `ASTRIA`, `Nats-Msg-Id` = id event untuk dedupe) |
 | `outbox` | Outbox transaksional (`enqueue` dalam transaksi bisnis) dan `OutboxRelay` |
-| `consumer` | Konsumen pull durable yang idempoten (`processed_events`), coba ulang dengan backoff, DLQ `astria.dlq.<konsumen>` |
+| `consumer` | Konsumen pull durable yang idempoten (`processed_events`), coba ulang dengan backoff, DLQ `astria.dlq.<konsumen>`; `PermanentError` untuk galat yang tidak perlu diulang |
 | `hmac_auth` | Tanda tangan HMAC-SHA256 per permintaan (jalur Gateway, Collector, penerbitan token) |
 | `auth` | Token layanan JWT EdDSA 300 detik, JWKS, `require_service(audience, allowed_callers)`, `ServiceTokenClient` |
 | `audit_client` | `AuditClient.record()` sinkron fail-closed untuk aksi kritis; `audit_event()` asinkron lewat outbox |
@@ -34,6 +34,31 @@ Python 3.14, uv 0.13.7, FastAPI, pydantic-settings, structlog, prometheus-client
 | `tracing` | Satu trace id untuk log, `X-Trace-Id`, galat, amplop event, dan Jaeger; `setup_otel` (OTLP HTTP ke `ASTRIA_OTLP_ENDPOINT`), `trace_span()`, `outbound_trace_headers()` |
 | `http` | `make_client()`: batas waktu, tanpa redirect; host internal mendapat `traceparent`/`X-Trace-Id` dan span klien, host luar tidak (`propagate_trace`) |
 | `metrics` | Metrik Prometheus bersama, termasuk histogram `astria_http_request_duration_seconds` dan `astria_event_handle_duration_seconds` |
+
+### Galat permanen di konsumen
+
+Semua galat handler dianggap sementara: pesan di-nak dengan backoff (1, 5, 30, 120 detik) dan baru masuk DLQ setelah
+`max_deliver` kali gagal. Untuk galat yang pasti sama di setiap percobaan (mis. data event tidak valid), handler
+melempar `PermanentError` supaya event langsung diterbitkan ke DLQ:
+
+```python
+from astria_common.consumer import PermanentError
+
+
+class KartuTidakValid(PermanentError, ValueError):  # tetap ValueError untuk kode lain yang sudah menangkapnya
+    ...
+
+
+async def handle(conn, envelope, data) -> None:
+    if data.kode.band not in BANDS:
+        raise KartuTidakValid(f"kode.band tidak dikenal: {data.kode.band!r}")
+    ...  # galat lain (database, jaringan) tetap sementara dan dicoba ulang
+```
+
+- Klasifikasi permanen harus eksplisit; jangan menangkap `Exception` lalu membungkusnya. Galat database dan jaringan tetap sementara.
+- Transaksi handler dibatalkan, jadi `processed_events` tidak terisi. Record DLQ memuat `reason` (`permanen:<NamaKelas>`), `detail` (pesan galat, maks 500 karakter), `event_id`, `trace_id`, dan `payload` (amplop utuh). Pesan galat tidak boleh memuat rahasia atau data mentah.
+- Urutannya: terbit ke DLQ, lalu ack pesan asli. Bila penerbitan DLQ gagal, pesan asli tidak di-ack: di-nak berjeda dan dicoba lagi, sampai `max_deliver` habis. `Nats-Msg-Id` DLQ diturunkan dari stream_seq, jadi penerbitan ulang disaring JetStream. Bila pengiriman terakhir pun gagal, pesan tetap di stream tanpa ack, dan `stream_seq` ada di log `event_surat_mati_gagal` untuk diputar ulang manual.
+- Metrik `astria_events_consumed_total` mendapat hasil `permanent` (selain `ok`, `duplicate`, `retry`, `dead_letter`).
 
 ### Trace
 

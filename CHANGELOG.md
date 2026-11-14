@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- `consumer.PermanentError` (common#9): handler yang melemparnya membuat `Consumer` menerbitkan event ke DLQ saat itu juga, tanpa menghabiskan `max_deliver` dan backoff (sekitar 2,5 menit). Record DLQ mendapat `detail`, `event_id`, `trace_id`. Metrik `astria_events_consumed_total` mendapat hasil `permanent`. Galat lain tetap sementara.
+
+### Fixed
+
+- Kegagalan menerbitkan ke DLQ tidak lagi mematikan loop konsumen. Pesan asli tidak di-ack: di-nak berjeda dan dicoba lagi selama `max_deliver` belum habis. Sebelumnya galatnya lolos dari `_run` dan menghentikan konsumen.
+
+### Catatan integrasi
+
+- Layanan yang ingin memakainya (mis. ticket: `KartuTidakValid` untuk band tidak dikenal atau correlation tidak cocok) menaikkan tag `astria-common` ke rilis berikutnya, lalu membuat galat itu turunan `PermanentError`. Tidak ada perubahan yang wajib: handler lama berjalan seperti sebelumnya.
+
 ## [0.3.0] - 2026-11-14
 
 ### Added

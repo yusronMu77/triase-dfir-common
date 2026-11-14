@@ -16,7 +16,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import func, select, text
 
-from astria_common.consumer import Consumer
+from astria_common.consumer import Consumer, PermanentError
 from astria_common.db import Database
 from astria_common.events import EventBus, new_event
 from astria_common.outbox import OutboxRelay, enqueue, metadata, outbox, processed_events
@@ -153,6 +153,46 @@ async def test_failing_handler_retries_then_dead_letters(stack) -> None:
     async with db.engine.connect() as conn:
         rows = (await conn.execute(select(func.count()).select_from(processed_events))).scalar_one()
     assert rows == 0  # transaksi gagal ikut membatalkan penanda processed_events
+    await consumer.stop()
+
+
+async def test_permanent_error_dead_letters_without_retry(stack) -> None:
+    db, bus, tag = stack
+    calls = 0
+
+    async def handler(_conn, envelope, data) -> None:
+        nonlocal calls
+        calls += 1
+        raise PermanentError("kode.band tidak dikenal: 'X'")
+
+    # max_deliver dan backoff bawaan: jalur coba ulang biasa baru masuk DLQ setelah sekitar 2,5 menit.
+    durable = f"perm-{tag}"
+    consumer = Consumer(bus, db, durable=durable, event_type="evidence.ingested", handler=handler)
+    await consumer.start()
+    await consumer.wait_subscribed(10)
+    event = new_event("evidence.ingested", example("evidence.ingested")["data"])
+    await bus.publish(event)
+
+    async def dead() -> bool:
+        return consumer.dead_lettered == 1
+
+    await wait_until(dead, timeout=5)
+    assert calls == 1
+    async with db.engine.connect() as conn:
+        rows = (await conn.execute(select(func.count()).select_from(processed_events))).scalar_one()
+    assert rows == 0  # transaksi dibatalkan: event tidak ditandai berhasil
+
+    dlq = await bus.js.get_last_msg(bus.stream, bus.dlq_subject(durable))
+    record = orjson.loads(dlq.data)
+    assert record["reason"] == "permanen:PermanentError"
+    assert record["detail"] == "kode.band tidak dikenal: 'X'"
+    assert record["event_id"] == event.id
+    assert orjson.loads(record["payload"])["id"] == event.id
+
+    info = await bus.js.consumer_info(bus.stream, durable)
+    assert info.num_ack_pending == 0  # pesan asli di-ack setelah DLQ
+    assert info.num_redelivered == 0  # tidak ada pengiriman ulang
+    assert (await consumer.check()).status == "degraded"
     await consumer.stop()
 
 
