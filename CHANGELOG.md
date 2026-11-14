@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-14
+
 ### Added
 
 - `consumer.PermanentError` (common#9): handler yang melemparnya membuat `Consumer` menerbitkan event ke DLQ saat itu juga, tanpa menghabiskan `max_deliver` dan backoff (sekitar 2,5 menit). Record DLQ mendapat `detail`, `event_id`, `trace_id`. Metrik `astria_events_consumed_total` mendapat hasil `permanent`. Galat lain tetap sementara.

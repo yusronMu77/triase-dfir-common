@@ -1,6 +1,6 @@
 [project]
 name = "astria-common"
-version = "0.3.0"
+version = "0.3.1"
 description = "Pustaka bersama Astria (astria_common): konfigurasi, pagar ASTRIA_ENV, log, health, metrik, auth layanan, event, outbox, konsumen idempoten."
 readme = "README.md"
 requires-python = ">=3.14"
